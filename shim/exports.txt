@@ -1,0 +1,15 @@
+# The complete public surface of ChromaH264.
+#
+# Everything not listed here — every avcodec_*, av_*, ff_* symbol in the FFmpeg we
+# statically pull in — stays private to the dylib. That is what makes it impossible for
+# the app's linker to bind `avcodec_find_decoder` to the ENGINE's demux-only libavcodec,
+# which is exactly what happened last time and returned `noDecoder` at runtime.
+#
+# If you add a function to chroma_h264.h, add it here too or it will not link.
+_ch264_create
+_ch264_destroy
+_ch264_thread_count
+_ch264_send
+_ch264_drain
+_ch264_receive
+_ch264_reset
