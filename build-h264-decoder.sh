@@ -1,50 +1,17 @@
 #!/bin/bash
-# Build ChromaH264.xcframework — an APP-SIDE software H.264 decoder.
+# Build ChromaH264.xcframework — a self-contained software H.264 decoder framework.
 #
-# WHY THIS LIVES HERE AND NOT IN THE ENGINE
-# -----------------------------------------
-# The app also links a second FFmpeg build — a demux-only one, belonging to its video engine. That engine holds a codec bright line: it never decodes patent-encumbered formats,
-# enforced by --disable-decoders plus a build-time self-check asserting the video/audio
-# decoder count is zero. That is a constraint of that library, and it stays intact —
-# this script does not touch its build. Chroma is a separate product and takes
-# its own decision. Keeping it on this side of the boundary means the engine's self-check
-# still passes at zero.
-#
-# WHAT IT'S FOR
-# -------------
-# VideoToolbox will not hardware-decode H.264 above 4096px wide — measured, with a
-# control: 1920x1080 and 4096x2048 ACCEPTED; 4320x2160 REFUSED at both 30 and 60fps;
-# HEVC 4320x2160@60 ACCEPTED. VR180 masters cross that line constantly, being two eyes
-# wide. AVFoundation then falls back to its own software decoder and manages ~15fps of a
-# 60fps source (measured on device: noNewFrame=75 of 90 pump ticks).
-#
-# FFmpeg decodes that same file at 220fps on two cores and 603fps on eight — 3.7x to 10x
-# realtime, against a 1.0x requirement. The gap is threading and NEON, not the codec.
-# Hence the two deliberate departures from the engine's flags below.
-#
-# WHY A DYNAMIC FRAMEWORK (this is the fix for the bug that parked v1)
-# -------------------------------------------------------------------
-# v1 built a STATIC xcframework and called avcodec_find_decoder() straight from Swift. It
-# linked cleanly and returned `noDecoder` at runtime. Chroma links TWO libavcodecs — the
-# engine's demux-only build and ours — and both static archives export
-# avcodec_find_decoder. The static linker resolves a symbol once, globally; it bound to
-# the engine's, which registers no h264 decoder and returns NULL. The decoder was in the
-# binary the whole time and nothing could reach it. (nm confirms: engine's libcffmpeg.a
-# has 0 ff_h264_decoder symbols and 4 avcodec_find_decoder.)
-#
-# Link ORDER cannot fix this and must not be attempted: two FFmpeg builds with different
-# configure flags have different struct layouts, so cross-bound calls are ABI roulette —
-# and worse, the engine's own avcodec calls would land in OUR decoder and quietly breach
-# that engine's codec policy at runtime.
-#
-# So: isolation. FFmpeg is compiled -fvisibility=hidden and linked into a DYNAMIC library
-# whose -exported_symbols_list contains only _ch264_*. avcodec_find_decoder resolves
-# INSIDE the dylib and is not exported, so there is nothing left to collide with. The app
-# only ever sees the C shim.
+# SHAPE OF THE BUILD (keep this if you modify it)
+# -----------------------------------------------
+# FFmpeg is compiled -fvisibility=hidden and linked into a DYNAMIC library whose
+# -exported_symbols_list contains only _ch264_*. Every FFmpeg symbol (including
+# avcodec_find_decoder) resolves INSIDE the dylib and is not exported, so the framework
+# cannot collide with any other FFmpeg build an app may link. Callers only ever see the
+# C shim.
 #
 # That is also the shape LGPL wants (this is stock LGPL FFmpeg — no --enable-gpl, no
-# --enable-nonfree): dynamically linked and relinkable, source shipped, attribution on the
-# Acknowledgements screen. The isolation fix and the licence fix are the same fix.
+# --enable-nonfree): dynamically linked and relinkable, with this repo as the
+# corresponding source.
 set -euo pipefail
 
 SRC="${FFMPEG_SRC:-$HOME/ffmpeg-n7.1}"
@@ -69,21 +36,17 @@ DECODER_FLAGS=(
   --enable-decoder=h264
   --enable-parser=h264
 
-  # DEPARTURE 1: threading. FFmpeg's h264 decoder frame-threads across cores, and that is
-  # most of the difference between AVFoundation's ~15fps and our 220-603fps on the same
-  # file. Without this there is no feature here.
+  # Threading: FFmpeg's h264 decoder frame-threads across cores — most of a software
+  # decoder's throughput comes from this.
   --enable-pthreads
 
-  # DEPARTURE 2: keep the assembly. The engine passes --disable-asm because it does no
-  # heavy DSP and wants a painless cross-compile — correct for a demuxer, fatal for a
-  # decoder. NEON is where H.264's per-macroblock work actually happens. (Also NOT
-  # --enable-small: that trades decode speed for binary size, the wrong side of this
-  # trade.)
+  # Keep the assembly: NEON is where H.264's per-macroblock work actually happens, so
+  # --disable-asm would be fatal for a decoder. (Also NOT --enable-small: that trades
+  # decode speed for binary size, the wrong side of the trade here.)
 
-  # NOT a departure — required: libavcodec/videotoolbox.c
-  # references kCVPixelBufferOpenGLESCompatibilityKey, which visionOS's SDK lacks. FFmpeg
-  # n7.1 predates visionOS and mis-branches it as iOS/tvOS, so the file fails to compile
-  # for xros. Costs us nothing: VideoToolbox is precisely what REFUSES these streams.
+  # Required: libavcodec/videotoolbox.c references kCVPixelBufferOpenGLESCompatibilityKey,
+  # which visionOS's SDK lacks. FFmpeg n7.1 predates visionOS and mis-branches it as
+  # iOS/tvOS, so the file fails to compile for xros.
   --disable-videotoolbox --disable-audiotoolbox
 
   --enable-static --disable-shared

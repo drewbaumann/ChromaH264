@@ -22,9 +22,8 @@ struct ch264_decoder {
 // CVPixelBuffer plumbing
 // ---------------------------------------------------------------------------
 
-/// A 4320x2160 NV12 buffer is ~14MB. Allocating one per frame at 60fps is 840MB/s of
-/// churn through the allocator on a device that is simultaneously rendering an immersive
-/// scene at 90Hz. Pool them; the pool recycles buffers the renderer has finished with.
+/// Large NV12 buffers are expensive to allocate per frame at video rates — pool them;
+/// the pool recycles buffers the consumer has finished with.
 static CVPixelBufferPoolRef make_pool(int width, int height) {
     const void *pool_keys[]   = { kCVPixelBufferPoolMinimumBufferCountKey };
     int min_buffers           = 6;

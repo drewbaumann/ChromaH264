@@ -1,22 +1,10 @@
 # ChromaH264
 
-The software H.264 decoder used by **Chroma** for Apple Vision Pro, published to satisfy the
-LGPL v2.1 obligations of the FFmpeg libraries it links.
+The software H.264 decoder framework used by **Chroma**, published to satisfy the LGPL v2.1
+obligations of the FFmpeg libraries it links.
 
 This repository contains everything needed to rebuild `ChromaH264.framework` from scratch,
 with a modified FFmpeg if you wish, and to relink Chroma against your build.
-
-## Why it exists
-
-Apple silicon will not hardware-decode H.264 wider than **4096 pixels**. VR180 masters cross
-that line routinely, because they carry both eyes side by side (4320×2160 is typical). Past
-the line, AVFoundation silently falls back to its own software decoder, which manages roughly
-15 frames per second of a 60fps source — a slideshow.
-
-FFmpeg's H.264 decoder handles the same file at well over 200fps, because it frame-threads
-across cores and uses NEON assembly. That difference is the entire reason this framework
-exists. (Measured, on the actual hardware: 56fps for Apple's software decoder against a 60fps
-requirement; the FFmpeg build here sustains a full 60fps with headroom to spare.)
 
 ## What's in the framework
 
@@ -42,24 +30,12 @@ patents administered by [Via LA](https://www.via-la.com/licensing-2/avc-h-264/) 
 MPEG-LA), and that is independent of which implementation you use. If you ship an H.264
 decoder in a product, that obligation is yours to address.
 
-## Why a dynamic framework with hidden symbols
+## Build notes
 
-Chroma links **two** copies of libavcodec: a demux-only build inside its video engine (which
-deliberately registers no decoders), and this decode-only build. Both static archives export
-`avcodec_find_decoder`. A static linker resolves that symbol once, globally — and it bound
-every call to the demux-only copy, which has no H.264 decoder and returns `NULL`. The decoder
-was present in the binary the whole time and nothing could reach it.
-
-Link *order* cannot fix this and must not be attempted: two FFmpeg builds with different
-configure flags have different struct layouts, so cross-bound calls are ABI roulette.
-
-So the fix is isolation, not ordering. FFmpeg is compiled `-fvisibility=hidden` and linked
-into a **dynamic** library whose export list contains only the seven `ch264_*` symbols
-(`shim/exports.txt`). Every FFmpeg symbol resolves inside the dylib and is invisible outside
-it, so there is nothing left to collide with.
-
-That shape is also exactly what the LGPL asks for — dynamically linked and relinkable — which
-is why it is the right answer rather than a workaround.
+FFmpeg is compiled `-fvisibility=hidden` and linked into a **dynamic** library whose export
+list contains only the seven `ch264_*` symbols (`shim/exports.txt`). Every FFmpeg symbol
+resolves inside the dylib and is invisible outside it. Keep that shape if you modify the
+build — it is also exactly what the LGPL asks for: dynamically linked and relinkable.
 
 Two things that will bite you if you change the build:
 
@@ -81,7 +57,7 @@ export FFMPEG_SRC=/path/to/ffmpeg-n7.1
 SLICES="xros-device xros-sim" ./build-h264-decoder.sh
 ```
 
-Produces `ChromaH264.xcframework`. The final lines verify the isolation that makes it work:
+Produces `ChromaH264.xcframework`. The final lines verify the export isolation:
 
 ```
 xros-device  exports: ch264_=7  av*=0 (must be 0)   contains ff_h264_decoder: 1 (must be >0)
